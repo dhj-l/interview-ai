@@ -8,14 +8,28 @@ import {
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { InterviewAIService } from './services/interview-ai.service';
+import { InterviewService } from './services/interview.service';
+import { ResponseUtil } from 'src/common/utils/response.util';
 
 @Controller('interview')
 export class InterviewController {
-  constructor(private readonly interviewAiService: InterviewAIService) {}
+  constructor(
+    private readonly interviewAiService: InterviewAIService,
+    private readonly interviewService: InterviewService,
+  ) {}
   // 接口 1：简历押题
   @Post('resume/quiz/stream')
   @UseGuards(JwtAuthGuard)
-  async resumeQuizStream(@Body() dto, @Request() req, @Res() res) {}
+  async resumeQuizStream(@Body() dto) {
+    const { resumeContent, jobDescription } = dto;
+    const result = await this.interviewService.analyzeResumeAndGenerateReport(
+      resumeContent,
+      jobDescription,
+    );
+    console.log('分析完成，准备开始模拟面试');
+
+    return ResponseUtil.success(result, '分析简历并生成报告成功');
+  }
 
   // 接口 2：开始模拟面试
   @Post('mock/start')
@@ -31,10 +45,4 @@ export class InterviewController {
   @Post('mock/end')
   @UseGuards(JwtAuthGuard)
   async endMockInterview(@Body() data, @Request() req) {}
-
-  //测试接口
-  @Post('test')
-  async test() {
-    await this.interviewAiService.startChat();
-  }
 }

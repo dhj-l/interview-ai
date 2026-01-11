@@ -4,11 +4,13 @@ import { InterviewService } from './services/interview.service';
 import { InterviewAIService } from './services/interview-ai.service';
 import { DocumentParserService } from './services/document-parser.service';
 import { ConfigModule } from '@nestjs/config';
+import { AIModule } from 'src/ai/ai.moudule';
 
 @Module({
   imports: [
-    ConfigModule,
+    // ConfigModule,
     // MongooseModule.forFeature([...]),
+    AIModule,
   ],
   controllers: [InterviewController],
   providers: [InterviewService, InterviewAIService, DocumentParserService],
