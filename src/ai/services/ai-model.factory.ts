@@ -2,7 +2,9 @@ import { ChatDeepSeek } from '@langchain/deepseek';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { CreateAIDto } from '../dto/create.dto';
-
+/**
+ * AI模型工厂(通用功能代码)
+ */
 @Injectable()
 export class AIModelFactory {
   private readonly logger = new Logger(AIModelFactory.name);
@@ -21,18 +23,25 @@ export class AIModelFactory {
       throw new Error('DEEPSEEK_API_KEY 未配置');
     }
     // 初始化模型
+    const envTemperature = this.configService.get<string>(
+      'DEEPSEEK_TEMPERATURE',
+    );
+    const resolvedTemperature =
+      typeof temperature === 'number'
+        ? temperature
+        : envTemperature !== undefined
+          ? Number(envTemperature)
+          : undefined;
+
     const model = new ChatDeepSeek({
       apiKey,
       model:
         modelType ||
         this.configService.get('DEEPSEEK_MODEL') ||
         'deepseek-chat',
-      temperature:
-        temperature ||
-        this.configService.get<number>('DEEPSEEK_TEMPERATURE') ||
-        0.7,
-      maxTokens: maxTokens || 4000,
-      timeout: timeout || 60000,
+      temperature: resolvedTemperature ?? 0.7,
+      maxTokens: maxTokens ?? 4000,
+      timeout: timeout ?? 60000,
     });
     return model;
   }

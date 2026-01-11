@@ -27,3 +27,16 @@ export const RESUME_QUIZ_PROMPT = `
 "summary":"1-2 句总结"
 }}
 `;
+
+export const CONVERSATION_CONTINUATION_PROMPT = `
+基于以下对话历史，请回答最后一个问题。
+
+对话历史：
+{history}
+
+请给出清晰、有逻辑的回答。
+`;
+
+export const RESUME_ANALYSIS_SYSTEM_MESSAGE = (position: string) => `
+你是一名资深的${position}面试官，有 15 年的招聘经验。你能快速从简历中分析候选人的核心能力。
+`;

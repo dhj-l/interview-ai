@@ -9,40 +9,47 @@ import {
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { InterviewAIService } from './services/interview-ai.service';
 import { InterviewService } from './services/interview.service';
-import { ResponseUtil } from 'src/common/utils/response.util';
+import { AnalyzeResumeDto, ContinueDto } from './dto/session.dto';
 
 @Controller('interview')
+@UseGuards(JwtAuthGuard)
 export class InterviewController {
   constructor(
     private readonly interviewAiService: InterviewAIService,
     private readonly interviewService: InterviewService,
   ) {}
-  // 接口 1：简历押题
-  @Post('resume/quiz/stream')
-  @UseGuards(JwtAuthGuard)
-  async resumeQuizStream(@Body() dto) {
-    const { resumeContent, jobDescription } = dto;
+  /**
+   * 开始分析简历
+   */
+  @Post('/analyze-resume')
+  async analyzeResume(
+    @Body()
+    dto: AnalyzeResumeDto,
+    @Request() req,
+  ) {
+    const { resumeContent, jobDescription, position } = dto;
     const result = await this.interviewService.analyzeResumeAndGenerateReport(
+      req.user.userId,
+      position,
       resumeContent,
       jobDescription,
     );
-    console.log('分析完成，准备开始模拟面试');
-
-    return ResponseUtil.success(result, '分析简历并生成报告成功');
+    return result;
   }
-
-  // 接口 2：开始模拟面试
-  @Post('mock/start')
-  @UseGuards(JwtAuthGuard)
-  async startMockInterview(@Body() dto, @Request() req) {}
-
-  // 接口 3：回答面试问题
-  @Post('mock/answer')
-  @UseGuards(JwtAuthGuard)
-  async answerMockInterview(@Body() dto, @Request() req) {}
-
-  // 接口 4：结束面试
-  @Post('mock/end')
-  @UseGuards(JwtAuthGuard)
-  async endMockInterview(@Body() data, @Request() req) {}
+  /**
+   * 继续对话
+   */
+  @Post('/continue')
+  async continueConversation(
+    @Body()
+    dto: ContinueDto,
+    @Request() req,
+  ) {
+    const { sessionId, message } = dto;
+    const result = await this.interviewService.continueConversation(
+      sessionId,
+      message,
+    );
+    return result;
+  }
 }
