@@ -22,12 +22,7 @@ export class AnalyzeResumeDto {
   @IsNotEmpty({ message: '简历内容不能为空' })
   @IsString({ message: '简历内容必须是字符串' })
   resumeContent: string;
-  /**
-   * 岗位描述
-   */
-  @IsNotEmpty({ message: '岗位描述不能为空' })
-  @IsString({ message: '岗位描述必须是字符串' })
-  jobDescription: string;
+
   /**
    * 岗位名称
    */
