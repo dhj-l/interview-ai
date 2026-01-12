@@ -83,4 +83,23 @@ export class SessionManagerService {
       this.sessionMap.delete(sessionId);
     }
   }
+
+  /**
+   * 获取最近n条消息
+   * @param sessionId 会话ID
+   * @param n 最近n条消息
+   * @returns 最近n条消息
+   */
+  getRecentMessages(sessionId: string, n: number) {
+    const sessionData = this.sessionMap.get(sessionId);
+    if (!sessionData) {
+      throw new Error('会话不存在');
+    }
+    const systemMessage = sessionData.messages[0];
+    const recentMessages = sessionData.messages.slice(-n);
+    if (recentMessages[0].role !== 'system') {
+      return [systemMessage, ...recentMessages];
+    }
+    return recentMessages;
+  }
 }
