@@ -61,4 +61,11 @@ export class ResumeQuizDto {
   @IsUUID(4)
   @IsOptional()
   requestId?: string;
+  /**
+   * 简历url
+   */
+  @IsString({ message: '简历url必须是字符串' })
+  @IsNotEmpty({ message: '简历url不能为空' })
+  @MaxLength(1000)
+  resumeUrl: string;
 }

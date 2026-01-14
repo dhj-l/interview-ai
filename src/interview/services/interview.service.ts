@@ -5,10 +5,21 @@ import { ResumeAnalysisService } from './resume-analysis.service';
 import { SessionManagerService } from 'src/ai/services/session.manager.service';
 import { RESUME_ANALYSIS_SYSTEM_MESSAGE } from '../prompts/resume_quiz.prompts';
 import { ConversationContinuationService } from './conversation-continuation.service';
-import { AnalyzeResumeDto } from '../dto/session.dto';
 import { Subject } from 'rxjs';
-import { ProgressEvent } from '../type';
+import { ProgressEvent, progressMessage } from '../type';
 import { ResumeQuizDto } from '../dto/resume.dto';
+import { InjectModel } from '@nestjs/mongoose';
+import {
+  ConsumptionRecord,
+  ConsumptionRecordDocument,
+  ConsumptionStatus,
+  ConsumptionType,
+} from '../schemas/consumption-record.schema';
+import { Model, Types } from 'mongoose';
+import { ResumeQuizResult } from '../schemas/interview-quit-result.schema';
+import { ResumeQuizResultDocument } from '../schemas/interview-quit-result.schema';
+import { User } from 'src/user/schemas/user.schema';
+import { v4 } from 'uuid';
 /**
  * 面试服务（业务代码）
  */
@@ -20,6 +31,12 @@ export class InterviewService {
     private readonly resumeAnalysisService: ResumeAnalysisService,
     private readonly sessionManagerService: SessionManagerService,
     private readonly conversationContinueService: ConversationContinuationService,
+    @InjectModel(ConsumptionRecord.name)
+    private readonly consumptionRecordModel: Model<ConsumptionRecordDocument>,
+    @InjectModel(ResumeQuizResult.name)
+    private readonly resumeQuizResultModel: Model<ResumeQuizResultDocument>,
+    @InjectModel(User.name)
+    private readonly userModel: Model<User>,
   ) {}
 
   private async executeResumeQuiz(
@@ -27,82 +44,92 @@ export class InterviewService {
     dto: ResumeQuizDto,
     subject?: Subject<ProgressEvent>,
   ): Promise<any> {
+    const recordId = v4();
+    const resultId = v4();
+    let consumptionRecord;
     try {
-      const progressMessage = [
+      //先检查是否已经存在对应的消费记录
+      const { requestId } = dto;
+      const res = await this.consumptionRecordModel.findOne({
+        userId,
+        requestId: requestId,
+        status: {
+          $in: [ConsumptionStatus.PENDING, ConsumptionStatus.SUCCESS],
+        },
+      });
+      //如果存在就返回
+      if (res) {
+        //如果状态为PENDING,说明任务正在进行中,需要等待
+        if (res.status === ConsumptionStatus.PENDING) {
+          throw new Error('面试分析任务正在进行中,请稍等');
+        }
+        //如果状态为SUCCESS,就根据userId和requestId查询对应的结果
+        const resume = await this.resumeQuizResultModel
+          .findOne({
+            userId,
+            requestId,
+          })
+          .exec();
+        if (!resume) {
+          throw new Error('简历分析内容,请重新提交');
+        }
+        //获取剩余次数
+        const remainingCount = await this.getRemainingCount({
+          userId,
+          type: 'resume',
+        });
+        return {
+          requestId,
+          questions: resume.questions,
+          summary: resume.summary,
+          remainingCount,
+          conversationRecordId: res.recordId,
+          isFormCache: true,
+        };
+      }
+      //用户扣费
+      const user = await this.userModel.findOneAndUpdate(
         {
-          progress: 0.05,
-          message: '🤖 AI正在深度理解你的内容,请稍等...',
+          _id: userId,
+          resumeRemainingCount: {
+            $gt: 0,
+          },
         },
         {
-          progress: 0.1,
-          message: '📊 AI正在分析你的技术栈和项目经验,请稍等...',
+          $inc: {
+            resumeRemainingCount: -1,
+          },
         },
         {
-          progress: 0.15,
-          message: '🔍 AI正在识别你的核心竞争力,请稍等...',
+          new: false,
         },
-        {
-          progress: 0.2,
-          message: '📋 AI正在对比岗位要求与您的背景,请稍等...',
+      );
+      this.logger.log(user);
+      if (!user) {
+        throw new Error('用户余额不足,请充值');
+      }
+      //创建消费记录
+      consumptionRecord = await this.consumptionRecordModel.create({
+        userId,
+        user: new Types.ObjectId(userId),
+        recordId,
+        requestId: dto.requestId,
+        type: ConsumptionType.RESUME_QUIZ,
+        status: ConsumptionStatus.PENDING,
+        consumedCount: 1,
+        description: `简历押题: ${dto.company} ${dto.position}`,
+        inputData: {
+          company: dto.company,
+          positionName: dto.position,
+          jd: dto.jd,
+          resume: dto.resumeContent,
+          minSalary: dto.minSalary,
+          maxSalary: dto.maxSalary,
         },
-
-        {
-          progress: 0.25,
-          message: '💡 AI 正在设计针对性的技术问题,请稍等...',
-        },
-        {
-          progress: 0.3,
-          message: '🎯 AI 正在挖掘您简历中的项目亮点,请稍等...',
-        },
-        {
-          progress: 0.35,
-          message: '🧠 AI 正在构思场景化的面试问题,请稍等...',
-        },
-        {
-          progress: 0.4,
-          message: '⚡ AI 正在设计不同难度的问题组合,请稍等...',
-        },
-        {
-          progress: 0.45,
-          message: '🔬 AI 正在分析您的技术深度和广度,请稍等...',
-        },
-        {
-          progress: 0.5,
-          message: '📝 AI 正在生成基于 STAR 法则的答案,请稍等...',
-        },
-        {
-          progress: 0.55,
-          message: '✨ AI 正在优化问题的表达方式,请稍等...',
-        },
-        {
-          progress: 0.6,
-          message: '🎨 AI 正在为您准备回答要点和技巧,请稍等...',
-        },
-        {
-          progress: 0.65,
-          message: '💎 AI 正在提炼您的项目成果和亮点,请稍等...',
-        },
-        {
-          progress: 0.7,
-          message: '🔧 AI 正在调整问题难度分布,请稍等...',
-        },
-        {
-          progress: 0.75,
-          message: '📚 AI 正在补充技术关键词和考察点  ,请稍等...',
-        },
-        {
-          progress: 0.8,
-          message: '🎓 AI 正在完善综合评估建议,请稍等...',
-        },
-        {
-          progress: 0.85,
-          message: '🚀 AI 正在做最后的质量检查,请稍等...',
-        },
-        {
-          progress: 0.9,
-          message: '✅ AI 即将完成问题生成...',
-        },
-      ];
+        resultId,
+        startedAt: new Date(),
+      });
+      this.logger.log('创建消费记录:%s', consumptionRecord);
       const result = this.resumeAnalysisService.resumeQuiz(dto);
       let index = 0;
       let currentMessage = progressMessage[index];
@@ -113,13 +140,48 @@ export class InterviewService {
         //发送事件
         this.emitProgressEvent(subject, progress, message, 'generating');
         if (index === progressMessage.length - 1) {
-          result.then((res) => {
+          // 最后一次发送事件，包含最终结果
+          result.then(async (res) => {
+            //将结果保存到数据库(TODO)
+            //更新消费记录状态为成功
+            await this.consumptionRecordModel.findOneAndUpdate(
+              {
+                _id: consumptionRecord._id,
+              },
+              {
+                status: ConsumptionStatus.SUCCESS,
+              },
+            );
             this.emitProgressEvent(subject, 1, '生成完成', 'done', res);
           });
           clearInterval(timer);
         }
       }, 1000);
     } catch (error) {
+      //回退用户余额
+      await this.refundCount({
+        userId,
+        type: 'resume',
+      });
+      //将消费记录状态设置为失败
+      await this.consumptionRecordModel.findOneAndUpdate(
+        {
+          _id: consumptionRecord._id,
+        },
+        {
+          status: ConsumptionStatus.FAILED,
+          errorMessage: error.message,
+          errors: error.errors,
+          errorStack: error.stack,
+          //是否已退款
+          isRefunded: true,
+          failedAt: new Date(),
+          refundedAt: new Date(),
+        },
+        {
+          new: false,
+        },
+      );
       if (subject && !subject.closed) {
         subject.next({
           type: 'error',
@@ -240,5 +302,57 @@ export class InterviewService {
       subject.error(error);
     });
     return subject;
+  }
+
+  /**
+   * 获取对应用户的面试类型剩余次数
+   */
+  async getRemainingCount(data: {
+    userId: string;
+    type: 'resume' | 'special' | 'behavior';
+  }) {
+    const { userId, type } = data;
+    const user = await this.userModel.findById(userId);
+    if (!user) {
+      throw new Error('用户不存在');
+    }
+    const {
+      resumeRemainingCount,
+      specialRemainingCount,
+      behaviorRemainingCount,
+    } = user;
+    switch (type) {
+      case 'resume':
+        return resumeRemainingCount;
+      case 'special':
+        return specialRemainingCount;
+      case 'behavior':
+        return behaviorRemainingCount;
+    }
+  }
+  /**
+   * 退还用户余额
+   */
+  async refundCount(data: {
+    userId: string;
+    type: 'resume' | 'special' | 'behavior';
+  }) {
+    const { userId, type } = data;
+    const user = await this.userModel.findById(userId);
+    if (!user) {
+      throw new Error('用户不存在');
+    }
+    switch (type) {
+      case 'resume':
+        user.resumeRemainingCount += 1;
+        break;
+      case 'special':
+        user.specialRemainingCount += 1;
+        break;
+      case 'behavior':
+        user.behaviorRemainingCount += 1;
+        break;
+    }
+    return await user.save();
   }
 }

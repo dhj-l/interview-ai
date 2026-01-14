@@ -11,6 +11,7 @@ import { InterviewAIService } from './services/interview-ai.service';
 import { InterviewService } from './services/interview.service';
 import { AnalyzeResumeDto, ContinueDto } from './dto/session.dto';
 import { ResumeQuizDto } from './dto/resume.dto';
+import { DocumentParserService } from './services/document-parser.service';
 
 @Controller('interview')
 @UseGuards(JwtAuthGuard)
@@ -18,6 +19,7 @@ export class InterviewController {
   constructor(
     private readonly interviewAiService: InterviewAIService,
     private readonly interviewService: InterviewService,
+    private readonly documentParserService: DocumentParserService,
   ) {}
   /**
    * 开始分析简历
@@ -63,30 +65,36 @@ export class InterviewController {
     @Request() req,
     @Res() res,
   ) {
+    const { resumeUrl } = dto;
     const userId = req.user.userId;
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-    res.setHeader('X-Accel-Buffering', 'no');
-    const subject = this.interviewService
-      .generateResumeQuizWithProgress(userId, dto)
-      .subscribe({
-        next(event) {
-          res.write(`data: ${JSON.stringify(event)}\n\n`);
-        },
-        error(err) {
-          res.write(
-            `data: ${JSON.stringify({ type: 'error', message: err.message })}\n\n`,
-          );
-        },
-        complete() {
-          res.end();
-        },
-      });
-    //客户端主动关闭连接时，取消订阅
-    res.on('close', () => {
-      subject.unsubscribe();
-    });
-    return subject;
+    // res.setHeader('Content-Type', 'text/event-stream');
+    // res.setHeader('Cache-Control', 'no-cache');
+    // res.setHeader('Connection', 'keep-alive');
+    // res.setHeader('X-Accel-Buffering', 'no');
+    // const subject = this.interviewService
+    //   .generateResumeQuizWithProgress(userId, dto)
+    //   .subscribe({
+    //     next(event) {
+    //       res.write(`data: ${JSON.stringify(event)}\n\n`);
+    //     },
+    //     error(err) {
+    //       res.write(
+    //         `data: ${JSON.stringify({ type: 'error', message: err.message })}\n\n`,
+    //       );
+    //     },
+    //     complete() {
+    //       res.end();
+    //     },
+    //   });
+    // //客户端主动关闭连接时，取消订阅
+    // res.on('close', () => {
+    //   subject.unsubscribe();
+    // });
+    // return subject;
+    const resumeContent =
+      await this.documentParserService.parserDocument(resumeUrl);
+    console.log('解析到的简历内容:', resumeContent);
+
+    return resumeContent;
   }
 }
