@@ -65,36 +65,40 @@ export class InterviewController {
     @Request() req,
     @Res() res,
   ) {
-    const { resumeUrl } = dto;
     const userId = req.user.userId;
-    // res.setHeader('Content-Type', 'text/event-stream');
-    // res.setHeader('Cache-Control', 'no-cache');
-    // res.setHeader('Connection', 'keep-alive');
-    // res.setHeader('X-Accel-Buffering', 'no');
-    // const subject = this.interviewService
-    //   .generateResumeQuizWithProgress(userId, dto)
-    //   .subscribe({
-    //     next(event) {
-    //       res.write(`data: ${JSON.stringify(event)}\n\n`);
-    //     },
-    //     error(err) {
-    //       res.write(
-    //         `data: ${JSON.stringify({ type: 'error', message: err.message })}\n\n`,
-    //       );
-    //     },
-    //     complete() {
-    //       res.end();
-    //     },
-    //   });
-    // //客户端主动关闭连接时，取消订阅
-    // res.on('close', () => {
-    //   subject.unsubscribe();
-    // });
-    // return subject;
-    const resumeContent =
-      await this.documentParserService.parserDocument(resumeUrl);
-    console.log('解析到的简历内容:', resumeContent);
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
 
-    return resumeContent;
+    const subscription = this.interviewService
+      .generateResumeQuizWithProgress(userId, dto)
+      .subscribe({
+        next(event) {
+          if (res.writable) {
+            res.write(`data: ${JSON.stringify(event)}\n\n`);
+          }
+        },
+        error(err) {
+          if (res.writable) {
+            res.write(
+              `data: ${JSON.stringify({ type: 'error', message: err.message })}\n\n`,
+            );
+            res.end();
+          }
+        },
+        complete() {
+          if (res.writable) {
+            res.end();
+          }
+        },
+      });
+
+    //客户端主动关闭连接时，取消订阅
+    res.on('close', () => {
+      subscription.unsubscribe();
+    });
+
+    // SSE接口不需要返回值，连接由res.write()和res.end()管理
   }
 }

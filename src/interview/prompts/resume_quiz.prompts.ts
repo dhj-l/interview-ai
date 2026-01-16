@@ -138,9 +138,9 @@ export const RESUME_QUIZ_PROMPT_ANALYSIS_ONLY = `
 **位**:{positionName}
 **薪资**:{salaryRange}
 ##职位描述(JD)
-(id
+{jd}
 ## 候选人简历
-(resumecontent}
+{resumecontent}
 
 # 二、匹配度分析要求
 ## matchScore (匹配度评分 0-100)

@@ -20,6 +20,7 @@ import { ResumeQuizResult } from '../schemas/interview-quit-result.schema';
 import { ResumeQuizResultDocument } from '../schemas/interview-quit-result.schema';
 import { User } from 'src/user/schemas/user.schema';
 import { v4 } from 'uuid';
+import { DocumentParserService } from './document-parser.service';
 /**
  * 面试服务（业务代码）
  */
@@ -31,6 +32,7 @@ export class InterviewService {
     private readonly resumeAnalysisService: ResumeAnalysisService,
     private readonly sessionManagerService: SessionManagerService,
     private readonly conversationContinueService: ConversationContinuationService,
+    private readonly documentParserService: DocumentParserService,
     @InjectModel(ConsumptionRecord.name)
     private readonly consumptionRecordModel: Model<ConsumptionRecordDocument>,
     @InjectModel(ResumeQuizResult.name)
@@ -48,11 +50,19 @@ export class InterviewService {
     const resultId = v4();
     let consumptionRecord;
     try {
+      const {
+        requestId,
+        company,
+        position: positionName,
+        jd,
+        resumeContent = '',
+        minSalary,
+        maxSalary,
+      } = dto;
       //先检查是否已经存在对应的消费记录
-      const { requestId } = dto;
       const res = await this.consumptionRecordModel.findOne({
         userId,
-        requestId: requestId,
+        requestId,
         status: {
           $in: [ConsumptionStatus.PENDING, ConsumptionStatus.SUCCESS],
         },
@@ -71,7 +81,7 @@ export class InterviewService {
           })
           .exec();
         if (!resume) {
-          throw new Error('简历分析内容,请重新提交');
+          throw new Error('简历分析内容不存在,请重新提交');
         }
         //获取剩余次数
         const remainingCount = await this.getRemainingCount({
@@ -87,101 +97,143 @@ export class InterviewService {
           isFormCache: true,
         };
       }
-      //用户扣费
-      const user = await this.userModel.findOneAndUpdate(
-        {
-          _id: userId,
-          resumeRemainingCount: {
-            $gt: 0,
-          },
-        },
-        {
-          $inc: {
-            resumeRemainingCount: -1,
-          },
-        },
-        {
-          new: false,
-        },
-      );
-      this.logger.log(user);
-      if (!user) {
-        throw new Error('用户余额不足,请充值');
-      }
-      //创建消费记录
-      consumptionRecord = await this.consumptionRecordModel.create({
+      //先创建消费记录
+      consumptionRecord = await this.createConsumptionRecord({
         userId,
         user: new Types.ObjectId(userId),
         recordId,
-        requestId: dto.requestId,
+        requestId,
         type: ConsumptionType.RESUME_QUIZ,
         status: ConsumptionStatus.PENDING,
         consumedCount: 1,
         description: `简历押题: ${dto.company} ${dto.position}`,
         inputData: {
-          company: dto.company,
-          positionName: dto.position,
-          jd: dto.jd,
-          resume: dto.resumeContent,
-          minSalary: dto.minSalary,
-          maxSalary: dto.maxSalary,
+          company,
+          positionName,
+          jd,
+          resume: resumeContent,
+          minSalary,
+          maxSalary,
         },
         resultId,
         startedAt: new Date(),
+        createdAt: new Date(),
+        isRefunded: false,
       });
-      this.logger.log('创建消费记录:%s', consumptionRecord);
-      const result = this.resumeAnalysisService.resumeQuiz(dto);
-      let index = 0;
-      let currentMessage = progressMessage[index];
-      let timer = setInterval(() => {
-        index++;
-        currentMessage = progressMessage[index];
-        const { progress, message } = currentMessage;
-        //发送事件
-        this.emitProgressEvent(subject, progress, message, 'generating');
-        if (index === progressMessage.length - 1) {
-          // 最后一次发送事件，包含最终结果
-          result.then(async (res) => {
-            //将结果保存到数据库(TODO)
-            //更新消费记录状态为成功
-            await this.consumptionRecordModel.findOneAndUpdate(
-              {
-                _id: consumptionRecord._id,
-              },
-              {
-                status: ConsumptionStatus.SUCCESS,
-              },
-            );
-            this.emitProgressEvent(subject, 1, '生成完成', 'done', res);
-          });
-          clearInterval(timer);
-        }
-      }, 1000);
+
+      //然后扣除用户余额
+      await this.deductUserBalance(userId);
+      this.logger.log('开始分析简历');
+      this.emitProgressEvent(subject, 0.1, '开始分析简历', 'prepare');
+      const content = await this.documentParserService.parserDocument(
+        dto.resumeUrl,
+      );
+      dto.resumeContent = content;
+      this.emitProgressEvent(subject, 0.3, '简历分析完成', 'done', content);
+      this.logger.log('开始简历押题');
+      this.emitProgressEvent(subject, 0.4, '开始简历押题', 'prepare');
+      //开始简历押题
+      const result = await this.resumeAnalysisService.resumeQuiz(dto);
+      this.emitProgressEvent(
+        subject,
+        0.7,
+        '简历押题完成,开始分析匹配度',
+        'done',
+        result,
+      );
+      this.logger.log('问题', result.questions.length);
+      //开始分析匹配度
+      this.emitProgressEvent(subject, 0.8, '开始分析匹配度', 'prepare');
+      const matchResult =
+        await this.resumeAnalysisService.analyzeMatchScore(dto);
+      this.emitProgressEvent(
+        subject,
+        0.9,
+        '匹配度分析完成',
+        'done',
+        matchResult,
+      );
+      //将消费记录状态设置为成功
+      await this.consumptionRecordModel.findOneAndUpdate(
+        {
+          _id: consumptionRecord._id,
+        },
+        {
+          status: ConsumptionStatus.SUCCESS,
+          completedAt: new Date(),
+        },
+        {
+          new: false,
+        },
+      );
+      //保存分析结果
+      this.emitProgressEvent(subject, 0.95, '保存分析结果和押题', 'done');
+      await this.resumeQuizResultModel.create({
+        requestId,
+        user: new Types.ObjectId(userId),
+        userId,
+        company,
+        position: positionName,
+        salaryRange: `${minSalary}-${maxSalary}`,
+        jobDescription: jd,
+        resumeSnapshot: resumeContent,
+        questions: result.questions,
+        summary: result.summary,
+        matchScore: matchResult.matchScore,
+        totalQuestions: result.questions.length,
+        matchLevel: matchResult.matchLevel,
+        skillMatches: matchResult.matchedSkills,
+        missingSkills: matchResult.missingSkills,
+        knowledgeGaps: matchResult.knowledgeGaps,
+        learningPriorities: matchResult.learningPriorities,
+        radarChart: matchResult.radarData,
+        strengths: matchResult.strengths,
+        weaknesses: matchResult.weaknesses,
+        interviewTips: matchResult.interviewTips,
+      });
+      this.emitProgressEvent(subject, 1, '分析结果和押题保存完成', 'done', {
+        result,
+        matchResult,
+      });
+      // 完成事件流，通知客户端连接可以关闭
+      if (subject && !subject.closed) {
+        subject.complete();
+      }
+
+      return {
+        result,
+        matchResult,
+      };
     } catch (error) {
       //回退用户余额
       await this.refundCount({
         userId,
         type: 'resume',
       });
-      //将消费记录状态设置为失败
-      await this.consumptionRecordModel.findOneAndUpdate(
-        {
-          _id: consumptionRecord._id,
-        },
-        {
-          status: ConsumptionStatus.FAILED,
-          errorMessage: error.message,
-          errors: error.errors,
-          errorStack: error.stack,
-          //是否已退款
-          isRefunded: true,
-          failedAt: new Date(),
-          refundedAt: new Date(),
-        },
-        {
-          new: false,
-        },
-      );
+
+      //只有当消费记录已经创建时，才更新其状态为失败
+      if (consumptionRecord) {
+        //将消费记录状态设置为失败
+        await this.consumptionRecordModel.findOneAndUpdate(
+          {
+            _id: consumptionRecord._id,
+          },
+          {
+            status: ConsumptionStatus.FAILED,
+            errorMessage: error.message,
+            errors: error.errors,
+            errorStack: error.stack,
+            //是否已退款
+            isRefunded: true,
+            failedAt: new Date(),
+            refundedAt: new Date(),
+          },
+          {
+            new: false,
+          },
+        );
+      }
+
       if (subject && !subject.closed) {
         subject.next({
           type: 'error',
@@ -191,6 +243,7 @@ export class InterviewService {
         });
         subject.complete();
       }
+
       throw error;
     }
   }
@@ -354,5 +407,36 @@ export class InterviewService {
         break;
     }
     return await user.save();
+  }
+  /**
+   * 创建消费记录
+   */
+  async createConsumptionRecord(data: ConsumptionRecord) {
+    return await this.consumptionRecordModel.create(data);
+  }
+  /**
+   * 扣除用户余额(原子扣除)
+   */
+  async deductUserBalance(userId: string) {
+    const user = await this.userModel.findOneAndUpdate(
+      {
+        _id: userId,
+        resumeRemainingCount: {
+          $gt: 0,
+        },
+      },
+      {
+        $inc: {
+          resumeRemainingCount: -1,
+        },
+      },
+      {
+        new: false,
+      },
+    );
+    if (!user) {
+      throw new Error('用户不存在或余额不足');
+    }
+    return user;
   }
 }

@@ -50,17 +50,16 @@ export class ResumeQuizDto {
   /**
    * 简历内容
    */
+  @IsOptional()
   @IsString({ message: '简历内容必须是字符串' })
-  @IsNotEmpty({ message: '简历内容不能为空' })
   @MaxLength(10000)
-  resumeContent: string;
+  resumeContent?: string;
 
   /**
    * 幂等性id
    */
   @IsUUID(4)
-  @IsOptional()
-  requestId?: string;
+  requestId: string;
   /**
    * 简历url
    */

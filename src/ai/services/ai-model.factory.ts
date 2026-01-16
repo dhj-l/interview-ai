@@ -40,7 +40,7 @@ export class AIModelFactory {
         this.configService.get('DEEPSEEK_MODEL') ||
         'deepseek-chat',
       temperature: resolvedTemperature ?? 0.7,
-      maxTokens: maxTokens ?? 4000,
+      maxTokens: maxTokens ?? 8192,
       timeout: timeout ?? 60000,
     });
     return model;

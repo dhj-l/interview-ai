@@ -1,7 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
-import axios from 'axios';
+import * as mammoth from 'mammoth';
 import { PDFParse } from 'pdf-parse';
 import { getHeader } from 'pdf-parse/node';
+import axios from 'axios';
 /**
  * 文档解析服务
  * 支持从 URL 下载并解析 PDF、DOCX 等格式的简历文件
@@ -29,7 +30,13 @@ export class DocumentParserService {
     } else {
       text = await this.parseDoc(url);
     }
+    //清除多余的空白，特殊字符
     text = this.clearText(text);
+    //检查解析后的文本质量
+    const { isValidate, warnings } = this.validateTextQuality(text);
+    if (!isValidate) {
+      throw new Error(warnings.join(';'));
+    }
     return text;
   }
   /**
@@ -70,7 +77,26 @@ export class DocumentParserService {
    * 解析doc文件
    */
   async parseDoc(url: string) {
-    return '';
+    this.logger.log('开始解析doc文件', url);
+    let text;
+    if (url.startsWith('http://') || url.startsWith('https://')) {
+      const response = await axios.get<ArrayBuffer>(url, {
+        responseType: 'arraybuffer',
+      });
+      const buffer = Buffer.from(response.data);
+      text = await mammoth.extractRawText({
+        buffer,
+      });
+    } else {
+      text = await mammoth.extractRawText({
+        path: url,
+      });
+    }
+    if (!text.value) {
+      throw new Error('解析doc文件失败');
+    }
+    this.logger.debug('解析doc文件成功', text.value);
+    return text.value;
   }
 
   /**
@@ -97,5 +123,62 @@ export class DocumentParserService {
         .replace(/Page\s+\d+/gi, '')
         .trim()
     );
+  }
+
+  /**
+   * 检查解析后的文本质量
+   */
+  validateTextQuality(text: string) {
+    const warnings: string[] = [];
+    let isValidate = true;
+    if (!text || text.length < 100) {
+      warnings.push(
+        '简历内容过短，建议包含基本信息、教育背景、工作经历、项目经历、技能图谱、联系方式等关键信息',
+      );
+      isValidate = false;
+      ``;
+    }
+    // 检查是否包含基本信息、教育背景、工作经历、项目经历、技能图谱、联系方式等关键信息
+    const keywords = [
+      '姓名',
+      '性别',
+      '年龄',
+      '手机',
+      '电话',
+      '邮箱',
+      'email',
+      '微信',
+      // 教育经历
+      '教育',
+      '学历',
+      '毕业',
+      '大学',
+      '学院',
+      '专业',
+      // 工作经历
+      '工作',
+      '经验',
+      '项目',
+      '公司',
+      '职位',
+      '岗位',
+      // 技能
+      '技能',
+      '能力',
+      '掌握',
+      '熟悉',
+      '精通',
+    ];
+    const filterKeyWords = keywords.filter((keyword) => text.includes(keyword));
+    if (filterKeyWords.length < 5) {
+      warnings.push(
+        '简历内容缺失关键信息，建议包含基本信息、教育背景、工作经历、项目经历、技能图谱、联系方式等关键信息',
+      );
+      isValidate = false;
+    }
+    return {
+      isValidate,
+      warnings,
+    };
   }
 }
