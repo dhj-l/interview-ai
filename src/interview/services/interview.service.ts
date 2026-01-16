@@ -50,152 +50,53 @@ export class InterviewService {
     const resultId = v4();
     let consumptionRecord;
     try {
-      const {
-        requestId,
-        company,
-        position: positionName,
-        jd,
-        resumeContent = '',
-        minSalary,
-        maxSalary,
-      } = dto;
-      //先检查是否已经存在对应的消费记录
-      const res = await this.consumptionRecordModel.findOne({
+      // 1. 检查是否存在已有记录
+      const existingResult = await this.checkExistingRecord(
         userId,
-        requestId,
-        status: {
-          $in: [ConsumptionStatus.PENDING, ConsumptionStatus.SUCCESS],
-        },
-      });
-      //如果存在就返回
-      if (res) {
-        //如果状态为PENDING,说明任务正在进行中,需要等待
-        if (res.status === ConsumptionStatus.PENDING) {
-          throw new Error('面试分析任务正在进行中,请稍等');
-        }
-        //如果状态为SUCCESS,就根据userId和requestId查询对应的结果
-        const resume = await this.resumeQuizResultModel
-          .findOne({
-            userId,
-            requestId,
-          })
-          .exec();
-        if (!resume) {
-          throw new Error('简历分析内容不存在,请重新提交');
-        }
-        //获取剩余次数
-        const remainingCount = await this.getRemainingCount({
-          userId,
-          type: 'resume',
-        });
-        return {
-          requestId,
-          questions: resume.questions,
-          summary: resume.summary,
-          remainingCount,
-          conversationRecordId: res.recordId,
-          isFormCache: true,
-        };
+        dto.requestId,
+      );
+      if (existingResult) {
+        return existingResult;
       }
-      //先创建消费记录
-      consumptionRecord = await this.createConsumptionRecord({
-        userId,
-        user: new Types.ObjectId(userId),
-        recordId,
-        requestId,
-        type: ConsumptionType.RESUME_QUIZ,
-        status: ConsumptionStatus.PENDING,
-        consumedCount: 1,
-        description: `简历押题: ${dto.company} ${dto.position}`,
-        inputData: {
-          company,
-          positionName,
-          jd,
-          resume: resumeContent,
-          minSalary,
-          maxSalary,
-        },
-        resultId,
-        startedAt: new Date(),
-        createdAt: new Date(),
-        isRefunded: false,
-      });
 
-      //然后扣除用户余额
+      // 2. 创建消费记录
+      consumptionRecord = await this.createPendingConsumptionRecord(
+        userId,
+        recordId,
+        resultId,
+        dto,
+      );
+
+      // 3. 扣除余额
       await this.deductUserBalance(userId);
-      this.logger.log('开始分析简历');
-      this.emitProgressEvent(subject, 0.1, '开始分析简历', 'prepare');
-      const content = await this.documentParserService.parserDocument(
-        dto.resumeUrl,
-      );
-      dto.resumeContent = content;
-      this.emitProgressEvent(subject, 0.3, '简历分析完成', 'done', content);
-      this.logger.log('开始简历押题');
-      this.emitProgressEvent(subject, 0.4, '开始简历押题', 'prepare');
-      //开始简历押题
-      const result = await this.resumeAnalysisService.resumeQuiz(dto);
-      this.emitProgressEvent(
+
+      // 4. 执行核心业务逻辑（解析简历、押题、分析匹配度）
+      const { result, matchResult, content } = await this.processResumeQuiz(
+        dto,
         subject,
-        0.7,
-        '简历押题完成,开始分析匹配度',
-        'done',
+      );
+
+      // 5. 更新消费记录状态
+      await this.updateConsumptionRecordStatus(
+        consumptionRecord._id,
+        ConsumptionStatus.SUCCESS,
+      );
+
+      // 6. 保存最终结果
+      this.emitProgressEvent(subject, 0.95, '保存分析结果和押题', 'done');
+      await this.saveResumeQuizResult(
+        userId,
+        dto,
+        content,
         result,
-      );
-      this.logger.log('问题', result.questions.length);
-      //开始分析匹配度
-      this.emitProgressEvent(subject, 0.8, '开始分析匹配度', 'prepare');
-      const matchResult =
-        await this.resumeAnalysisService.analyzeMatchScore(dto);
-      this.emitProgressEvent(
-        subject,
-        0.9,
-        '匹配度分析完成',
-        'done',
         matchResult,
       );
-      //将消费记录状态设置为成功
-      await this.consumptionRecordModel.findOneAndUpdate(
-        {
-          _id: consumptionRecord._id,
-        },
-        {
-          status: ConsumptionStatus.SUCCESS,
-          completedAt: new Date(),
-        },
-        {
-          new: false,
-        },
-      );
-      //保存分析结果
-      this.emitProgressEvent(subject, 0.95, '保存分析结果和押题', 'done');
-      await this.resumeQuizResultModel.create({
-        requestId,
-        user: new Types.ObjectId(userId),
-        userId,
-        company,
-        position: positionName,
-        salaryRange: `${minSalary}-${maxSalary}`,
-        jobDescription: jd,
-        resumeSnapshot: resumeContent,
-        questions: result.questions,
-        summary: result.summary,
-        matchScore: matchResult.matchScore,
-        totalQuestions: result.questions.length,
-        matchLevel: matchResult.matchLevel,
-        skillMatches: matchResult.matchedSkills,
-        missingSkills: matchResult.missingSkills,
-        knowledgeGaps: matchResult.knowledgeGaps,
-        learningPriorities: matchResult.learningPriorities,
-        radarChart: matchResult.radarData,
-        strengths: matchResult.strengths,
-        weaknesses: matchResult.weaknesses,
-        interviewTips: matchResult.interviewTips,
-      });
+
       this.emitProgressEvent(subject, 1, '分析结果和押题保存完成', 'done', {
         result,
         matchResult,
       });
-      // 完成事件流，通知客户端连接可以关闭
+
       if (subject && !subject.closed) {
         subject.complete();
       }
@@ -205,46 +106,248 @@ export class InterviewService {
         matchResult,
       };
     } catch (error) {
-      //回退用户余额
-      await this.refundCount({
+      await this.handleResumeQuizError(
         userId,
-        type: 'resume',
-      });
-
-      //只有当消费记录已经创建时，才更新其状态为失败
-      if (consumptionRecord) {
-        //将消费记录状态设置为失败
-        await this.consumptionRecordModel.findOneAndUpdate(
-          {
-            _id: consumptionRecord._id,
-          },
-          {
-            status: ConsumptionStatus.FAILED,
-            errorMessage: error.message,
-            errors: error.errors,
-            errorStack: error.stack,
-            //是否已退款
-            isRefunded: true,
-            failedAt: new Date(),
-            refundedAt: new Date(),
-          },
-          {
-            new: false,
-          },
-        );
-      }
-
-      if (subject && !subject.closed) {
-        subject.next({
-          type: 'error',
-          progress: 0,
-          label: '生成失败',
-          message: error.message,
-        });
-        subject.complete();
-      }
-
+        error,
+        consumptionRecord,
+        subject,
+      );
       throw error;
+    }
+  }
+
+  /**
+   * 检查是否已经存在对应的消费记录
+   */
+  private async checkExistingRecord(userId: string, requestId: string) {
+    const res = await this.consumptionRecordModel.findOne({
+      userId,
+      requestId,
+      status: {
+        $in: [ConsumptionStatus.PENDING, ConsumptionStatus.SUCCESS],
+      },
+    });
+
+    if (!res) {
+      return null;
+    }
+
+    if (res.status === ConsumptionStatus.PENDING) {
+      throw new Error('面试分析任务正在进行中,请稍等');
+    }
+
+    const resume = await this.resumeQuizResultModel
+      .findOne({
+        userId,
+        requestId,
+      })
+      .exec();
+
+    if (!resume) {
+      throw new Error('简历分析内容不存在,请重新提交');
+    }
+
+    const remainingCount = await this.getRemainingCount({
+      userId,
+      type: 'resume',
+    });
+
+    return {
+      requestId,
+      questions: resume.questions,
+      summary: resume.summary,
+      remainingCount,
+      conversationRecordId: res.recordId,
+      isFormCache: true,
+    };
+  }
+
+  /**
+   * 创建待处理的消费记录
+   */
+  private async createPendingConsumptionRecord(
+    userId: string,
+    recordId: string,
+    resultId: string,
+    dto: ResumeQuizDto,
+  ) {
+    const {
+      requestId,
+      company,
+      position: positionName,
+      jd,
+      resumeContent = '',
+      minSalary,
+      maxSalary,
+    } = dto;
+
+    return await this.createConsumptionRecord({
+      userId,
+      user: new Types.ObjectId(userId),
+      recordId,
+      requestId,
+      type: ConsumptionType.RESUME_QUIZ,
+      status: ConsumptionStatus.PENDING,
+      consumedCount: 1,
+      description: `简历押题: ${dto.company} ${dto.position}`,
+      inputData: {
+        company,
+        positionName,
+        jd,
+        resume: resumeContent,
+        minSalary,
+        maxSalary,
+      },
+      resultId,
+      startedAt: new Date(),
+      createdAt: new Date(),
+      isRefunded: false,
+    });
+  }
+
+  /**
+   * 处理简历解析、押题、匹配度分析的核心流程
+   */
+  private async processResumeQuiz(
+    dto: ResumeQuizDto,
+    subject?: Subject<ProgressEvent>,
+  ) {
+    this.logger.log('开始分析简历');
+    this.emitProgressEvent(subject, 0.1, '开始分析简历', 'prepare');
+
+    const content = await this.documentParserService.parserDocument(
+      dto.resumeUrl,
+    );
+    dto.resumeContent = content;
+    this.emitProgressEvent(subject, 0.3, '简历分析完成', 'done', content);
+
+    this.logger.log('开始简历押题');
+    this.emitProgressEvent(subject, 0.4, '开始简历押题', 'prepare');
+    const result = await this.resumeAnalysisService.resumeQuiz(dto);
+
+    this.emitProgressEvent(
+      subject,
+      0.7,
+      '简历押题完成,开始分析匹配度',
+      'done',
+      result,
+    );
+    this.logger.log('问题', result.questions.length);
+
+    this.emitProgressEvent(subject, 0.8, '开始分析匹配度', 'prepare');
+    const matchResult = await this.resumeAnalysisService.analyzeMatchScore(dto);
+
+    this.emitProgressEvent(subject, 0.9, '匹配度分析完成', 'done', matchResult);
+
+    return { result, matchResult, content };
+  }
+
+  /**
+   * 更新消费记录状态
+   */
+  private async updateConsumptionRecordStatus(
+    id: any,
+    status: ConsumptionStatus,
+    error?: any,
+  ) {
+    const updateData: any = {
+      status,
+      completedAt: new Date(),
+    };
+
+    if (status === ConsumptionStatus.FAILED && error) {
+      updateData.errorMessage = error.message;
+      updateData.errors = error.errors;
+      updateData.errorStack = error.stack;
+      updateData.isRefunded = true;
+      updateData.failedAt = new Date();
+      updateData.refundedAt = new Date();
+    }
+
+    return await this.consumptionRecordModel.findOneAndUpdate(
+      { _id: id },
+      updateData,
+      { new: false },
+    );
+  }
+
+  /**
+   * 保存简历押题结果
+   */
+  private async saveResumeQuizResult(
+    userId: string,
+    dto: ResumeQuizDto,
+    resumeSnapshot: string,
+    result: any,
+    matchResult: any,
+  ) {
+    const {
+      requestId,
+      company,
+      position: positionName,
+      jd,
+      minSalary,
+      maxSalary,
+    } = dto;
+
+    await this.resumeQuizResultModel.create({
+      requestId,
+      user: new Types.ObjectId(userId),
+      userId,
+      company,
+      position: positionName,
+      salaryRange: `${minSalary}-${maxSalary}`,
+      jobDescription: jd,
+      resumeSnapshot,
+      questions: result.questions,
+      summary: result.summary,
+      matchScore: matchResult.matchScore,
+      totalQuestions: result.questions.length,
+      matchLevel: matchResult.matchLevel,
+      skillMatches: matchResult.matchedSkills,
+      missingSkills: matchResult.missingSkills,
+      knowledgeGaps: matchResult.knowledgeGaps,
+      learningPriorities: matchResult.learningPriorities,
+      radarChart: matchResult.radarData,
+      strengths: matchResult.strengths,
+      weaknesses: matchResult.weaknesses,
+      interviewTips: matchResult.interviewTips,
+    });
+  }
+
+  /**
+   * 统一错误处理
+   */
+  private async handleResumeQuizError(
+    userId: string,
+    error: any,
+    consumptionRecord: any,
+    subject?: Subject<ProgressEvent>,
+  ) {
+    // 回退余额
+    await this.refundCount({
+      userId,
+      type: 'resume',
+    });
+
+    // 更新消费记录状态为失败
+    if (consumptionRecord) {
+      await this.updateConsumptionRecordStatus(
+        consumptionRecord._id,
+        ConsumptionStatus.FAILED,
+        error,
+      );
+    }
+
+    // 发送错误事件
+    if (subject && !subject.closed) {
+      subject.next({
+        type: 'error',
+        progress: 0,
+        label: '生成失败',
+        message: error.message,
+      });
+      subject.complete();
     }
   }
   private emitProgressEvent(
