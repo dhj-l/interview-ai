@@ -57,6 +57,10 @@ export class InterviewService {
         dto.requestId,
       );
       if (existingResult) {
+        this.emitProgressEvent(subject, 1, '已生成', 'done', existingResult);
+        if (subject && !subject.closed) {
+          subject.complete();
+        }
         return existingResult;
       }
 
