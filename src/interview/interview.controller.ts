@@ -12,6 +12,7 @@ import { InterviewService } from './services/interview.service';
 import { AnalyzeResumeDto, ContinueDto } from './dto/session.dto';
 import { ResumeQuizDto } from './dto/resume.dto';
 import { DocumentParserService } from './services/document-parser.service';
+import { MockInterviewDto } from './dto/mock.dto';
 
 @Controller('interview')
 @UseGuards(JwtAuthGuard)
@@ -100,5 +101,39 @@ export class InterviewController {
     });
 
     // SSE接口不需要返回值，连接由res.write()和res.end()管理
+  }
+  /**
+   * 开始模拟面试
+   */
+  @Post('/mockInterview')
+  async mockInterview(
+    @Body() data: MockInterviewDto,
+    @Request() req,
+    @Res() res,
+  ) {
+    const userId = req.user.userId;
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    const subject = await this.interviewService.startMockInterview(
+      data,
+      userId,
+    );
+    res.write(`data: connected\n\n`);
+    subject.subscribe({
+      next(event) {
+        //TODO
+      },
+      error(err) {
+        res.write(
+          `data: ${JSON.stringify({ type: 'error', message: err.message })}\n\n`,
+        );
+        res.end();
+      },
+      complete() {
+        res.end();
+      },
+    });
   }
 }
