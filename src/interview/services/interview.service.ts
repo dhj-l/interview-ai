@@ -21,6 +21,7 @@ import { ResumeQuizResultDocument } from '../schemas/interview-quit-result.schem
 import { User } from 'src/user/schemas/user.schema';
 import { v4 } from 'uuid';
 import { DocumentParserService } from './document-parser.service';
+import { MockInterviewDto } from '../dto/mock.dto';
 /**
  * 面试服务（业务代码）
  */
@@ -541,5 +542,13 @@ export class InterviewService {
       throw new Error('用户不存在或余额不足');
     }
     return user;
+  }
+  /**
+   * 开始模拟面试
+   */
+  async startMockInterview(data: MockInterviewDto, userId: string) {
+    const subject = new Subject<MockInterviewDto>();
+
+    return subject;
   }
 }

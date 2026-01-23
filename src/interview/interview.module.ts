@@ -3,7 +3,6 @@ import { InterviewController } from './interview.controller';
 import { InterviewService } from './services/interview.service';
 import { InterviewAIService } from './services/interview-ai.service';
 import { DocumentParserService } from './services/document-parser.service';
-import { ConfigModule } from '@nestjs/config';
 import { AIModule } from 'src/ai/ai.moudule';
 import { ResumeAnalysisService } from './services/resume-analysis.service';
 import { ConversationContinuationService } from './services/conversation-continuation.service';
@@ -17,6 +16,10 @@ import {
   ResumeQuizResultSchema,
 } from './schemas/interview-quit-result.schema';
 import { User, UserSchema } from 'src/user/schemas/user.schema';
+import {
+  AIInterviewResult,
+  AIInterviewResultSchema,
+} from './schemas/ai-interview-result.schema';
 
 @Module({
   imports: [
@@ -33,6 +36,10 @@ import { User, UserSchema } from 'src/user/schemas/user.schema';
       {
         name: User.name,
         schema: UserSchema,
+      },
+      {
+        name: AIInterviewResult.name,
+        schema: AIInterviewResultSchema,
       },
     ]),
     AIModule,
