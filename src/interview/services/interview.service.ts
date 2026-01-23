@@ -335,41 +335,40 @@ export class InterviewService {
       type: 'resume',
     });
 
-      //只有当消费记录已经创建时，才更新其状态为失败
-      if (consumptionRecord) {
-        //将消费记录状态设置为失败
-        await this.consumptionRecordModel.findOneAndUpdate(
-          {
-            _id: consumptionRecord._id,
-          },
-          {
-            status: ConsumptionStatus.FAILED,
-            errorMessage: error.message,
-            errors: error.errors,
-            errorStack: error.stack,
-            //是否已退款
-            isRefunded: true,
-            failedAt: new Date(),
-            refundedAt: new Date(),
-          },
-          {
-            new: false,
-          },
-        );
-      }
-
-      if (subject && !subject.closed) {
-        subject.next({
-          type: 'error',
-          progress: 0,
-          label: '生成失败',
-          message: error.message,
-        });
-        subject.complete();
-      }
-
-      throw error;
+    //只有当消费记录已经创建时，才更新其状态为失败
+    if (consumptionRecord) {
+      //将消费记录状态设置为失败
+      await this.consumptionRecordModel.findOneAndUpdate(
+        {
+          _id: consumptionRecord._id,
+        },
+        {
+          status: ConsumptionStatus.FAILED,
+          errorMessage: error.message,
+          errors: error.errors,
+          errorStack: error.stack,
+          //是否已退款
+          isRefunded: true,
+          failedAt: new Date(),
+          refundedAt: new Date(),
+        },
+        {
+          new: false,
+        },
+      );
     }
+
+    if (subject && !subject.closed) {
+      subject.next({
+        type: 'error',
+        progress: 0,
+        label: '生成失败',
+        message: error.message,
+      });
+      subject.complete();
+    }
+
+    throw error;
   }
   private emitProgressEvent(
     subject: Subject<ProgressEvent> | undefined,
