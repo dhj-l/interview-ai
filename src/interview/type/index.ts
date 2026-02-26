@@ -8,6 +8,21 @@ export interface ProgressEvent {
   error?: string;
   stage?: 'prepare' | 'generating' | 'saving' | 'done'; // 当前阶段
 }
+export type ConversationHistory = {
+  role: 'interviewer' | 'candidate';
+  content: string;
+};
+
+export interface InterviewQuestionContext {
+  type: 'special' | 'comprehensive';
+  resumeContent: string;
+  company?: string;
+  positionName?: string;
+  jd?: string;
+  conversationHistory?: ConversationHistory[];
+  elapsedMinutes: number;
+  targetDuration: number;
+}
 
 export const progressMessage = [
   {

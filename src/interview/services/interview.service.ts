@@ -5,7 +5,7 @@ import { ResumeAnalysisService } from './resume-analysis.service';
 import { SessionManagerService } from 'src/ai/services/session.manager.service';
 import { RESUME_ANALYSIS_SYSTEM_MESSAGE } from '../prompts/resume_quiz.prompts';
 import { ConversationContinuationService } from './conversation-continuation.service';
-import { Subject } from 'rxjs';
+import { Subject, ReplaySubject } from 'rxjs';
 import { ProgressEvent, progressMessage } from '../type';
 import { ResumeQuizDto } from '../dto/resume.dto';
 import { InjectModel } from '@nestjs/mongoose';
@@ -21,7 +21,8 @@ import { ResumeQuizResultDocument } from '../schemas/interview-quit-result.schem
 import { User } from 'src/user/schemas/user.schema';
 import { v4 } from 'uuid';
 import { DocumentParserService } from './document-parser.service';
-import { MockInterviewDto } from '../dto/mock.dto';
+import { AnswerMockInterviewDto, MockInterviewDto } from '../dto/mock.dto';
+import { InterviewAIService } from './interview-ai.service';
 /**
  * 面试服务（业务代码）
  */
@@ -34,6 +35,7 @@ export class InterviewService {
     private readonly sessionManagerService: SessionManagerService,
     private readonly conversationContinueService: ConversationContinuationService,
     private readonly documentParserService: DocumentParserService,
+    private readonly InterviewAIService: InterviewAIService,
     @InjectModel(ConsumptionRecord.name)
     private readonly consumptionRecordModel: Model<ConsumptionRecordDocument>,
     @InjectModel(ResumeQuizResult.name)
@@ -551,8 +553,82 @@ export class InterviewService {
    * 开始模拟面试
    */
   async startMockInterview(data: MockInterviewDto, userId: string) {
+    const {
+      type,
+      resumeContent,
+      companyName,
+      positionName,
+      jd,
+      candidateName,
+    } = data;
+    const subject = new ReplaySubject(1);
+    let recordId = v4();
+    try {
+      //先查询用户是否存在面试次数
+      const count = await this.getRemainingCount({
+        userId,
+        type: 'special',
+      });
+      if (count <= 0) {
+        throw new Error('用户不存在或余额不足');
+      }
+      //扣除用户余额
+      const user = await this.userModel.findOneAndUpdate(
+        {
+          _id: userId,
+          specialRemainingCount: {
+            $gt: 0,
+          },
+        },
+        {
+          $inc: {
+            specialRemainingCount: -1,
+          },
+        },
+        {
+          new: false,
+        },
+      );
+      //创建消费记录
+      // await this.createConsumptionRecord({
+      //   recordId,
+      // });
+      if (!user) {
+        throw new Error('用户不存在或余额不足');
+      }
+      const startContent =
+        await this.InterviewAIService.generateOpeningQuestionStream({
+          positionName,
+          interviewName: '小明',
+          candidateName,
+        });
+      subject.next({
+        data: startContent,
+      });
+    } catch (error) {}
+    return subject;
+  }
+  /**
+   * 回答模拟面试问题
+   */
+  async answerMockInterviewQuestion(
+    data: AnswerMockInterviewDto,
+    userId: string,
+  ) {
     const subject = new Subject<MockInterviewDto>();
 
     return subject;
   }
+  /**
+   * 结束模拟面试
+   */
+  async endMockInterview(resultId: string) {}
+  /**
+   * 暂停面试
+   */
+  async pauseMockInterview(resultId: string) {}
+  /**
+   * 恢复面试
+   */
+  async resumeMockInterview(resultId: string) {}
 }
